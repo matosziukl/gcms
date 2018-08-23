@@ -1,0 +1,59 @@
+---
+title: "PAH with graphs"
+author: "lauren"
+date: "2/7/2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## This is the worked up data from the acetone extractions of PAH spiked soil
+All values are in ng
+
+
+```{r message=FALSE,echo=FALSE,fig.height=3,fig.width=4}
+
+#import worked up data sheet where all values are in ng
+mydata <- read.csv("PAH.acetone.graphs.csv")
+wtf=read.csv(quechers_triplicate.csv)
+library(ggplot2)
+library(reshape2)
+
+#import a list of components that you're looking for
+components <- read.csv("components.csv")
+components$component=as.character(components$component)
+components <- components[[1]]
+
+for(thing in components)
+{
+print(ggplot(data=mydata,aes_string("Spike",thing,color="Sample")) +
+  geom_point())
+  
+}
+
+
+
+```
+
+Same plots, but zoom in on the first 3 spikes
+
+
+```{r message=FALSE,echo=FALSE,fig.height=3,fig.width=4}
+
+for(thing in components)
+{
+print(ggplot(data=mydata,aes_string("Spike",thing,color="Sample")) +
+  geom_point() +
+    xlim(0,600) +
+    ylim(0,2500))
+  
+}
+
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

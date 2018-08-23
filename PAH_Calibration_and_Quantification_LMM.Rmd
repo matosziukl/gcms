@@ -1,0 +1,557 @@
+---
+title: "PAH oxidation calibration and quantification"
+output: html_notebook
+---
+
+
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+#graphs require ggplot2
+library(ggplot2)
+library(ggrepel)
+
+#Set your working directory where the data .csv file(s) are located
+########################################
+########   CHANGE DIRECTORY   ###########
+########################################
+setwd("~/Desktop/GCMS-LMM")
+
+
+#Load entire (standards, samples, duplicates) data file of run
+########################################
+########   CHANGE FILENAME   ###########
+########################################
+mydata <- read.csv("quechers-triplicate-organized_3.csv")
+
+#Load entire (standards, samples, duplicates) data file of run
+SampleInfo <- read.csv("SampleInfo_PAH.csv")
+
+```
+
+Convert any negative area values to 0  
+Sorry about the lack of elegance... big dumb hairless ape coding
+```{r}
+###Convert any negative areas to 0 
+#Sorry about the lack of elegance... big dumb hairless ape coding
+a <- mydata[,8:ncol(mydata)]
+b <- mydata[,1:7]
+a[a<0] <- 0
+mydata <- cbind(b,a)
+```
+
+Locate standards within dataframe  
+This code keys on "Std" in the standard name. If the standard names change then we'll need to change this code.  It returns the row numbers in which the standards occur, isolates those standards in a dataframe. We also create a samples data frame here that removes all the standards.
+```{r}
+#Locate standards
+std.loc <- grep("Std", as.character(mydata[,2]))
+stds <- mydata[std.loc,]
+stds.vars <- c("sample", "name", "rundate", "gc.method", 
+               "quant.method", "locate", "Nap_area",	"Acy_area",
+               "BrN_area", "Ace_area", "Flu_area", "Phe_area","Ant_area", 
+               "Fla_area",	"Pyr_area", "Bza_area", "Cry_area", "Bzf_area", 
+               "Bzp_area", "Idp_area", "Dba_area", "Bzy_area")
+standards.area <- stds[stds.vars]
+samples <- mydata[-std.loc,]
+```
+
+This code keys on the standard # (i.e. concentration) which should be in the rightmost part of the cell.  The Standard number is then made into its own column.
+```{r}
+#function to pick the right most character in a string
+substrRight <- function(x, n){
+  substr(x, nchar(x)-n+1, nchar(x))
+}
+
+#right most character in standard sample name is standard number (needed to take TWO right most characters to make it work)
+standards.area$sample <- as.character(standards.area$sample)
+standards.area$std.no <- substrRight(standards.area$sample, 1)
+standards.area$std.no <- trimws(standards.area$std.no, which = c("both"))
+standards.area$std.no <- as.factor(standards.area$std.no)
+
+```
+
+Load csv containing standard concentrations, fix formatting, and merge them with our standards file so that we have area values from GCMS and known concentrations that we can now develop our calibration from.
+```{r}
+#load csv of standard compound concentrations
+########################################
+##   CHANGE DIRECTORY AND FILENAME   ###
+########################################
+standards.conc <- read.csv("Standards_PAH_q2.csv", header=TRUE)
+standards.conc$std.no <- trimws(standards.conc$std.no, which = c("both"))
+standards.conc$std.no <- as.factor(standards.conc$std.no)
+
+#join standard compound concentrations and standard GC results
+standards.all <- merge(standards.area,standards.conc,by="std.no")
+
+#join sample information file and samples files
+samples.all <- merge(SampleInfo, samples,by="name")
+names(samples.all)[names(samples.all) == 'rundate.x'] <- 'rundate'
+names(samples.all)[names(samples.all) == 'sample.x'] <- 'sample'
+samples.all <- subset(samples.all, select=-c(X,rundate.y,sample.y))
+```
+
+```{r}
+#Quantification----
+#Quantification of internal standards and development of correction factors
+
+
+tryme=standards.all
+tryme2=samples.all
+
+
+#import a list of molecules that you want to quantify
+all.molecules=read.csv("components.csv")
+
+#make it into a vector of characters
+all.molecules$component=as.character(all.molecules$component)
+all.molecules <- all.molecules[[1]]
+
+
+for(molecule in all.molecules)
+{
+  molecule.area=paste0(molecule,"_area")
+  molecule.area.sq = paste0(molecule,"_area2")
+  molecule.conc = paste0(molecule,"_ngmL")
+  molecule.ng = paste0(molecule,"_ng")
+  tryme[[molecule.area.sq]]=tryme[[molecule.area]]^2
+  regression=paste(molecule,"_nguL ~ ",molecule,"_area + ",molecule,"_area2",sep="")
+  polynomial <- lm(data=tryme,as.formula(regression))
+  summary(polynomial)
+  r2 <- format(summary(polynomial)$r.squared, digits = 3)
+  B0 <- summary(polynomial)$coefficients[1,1]
+  B1 <- summary(polynomial)$coefficients[2,1]
+  B2 <- summary(polynomial)$coefficients[3,1]
+  tryme2[[molecule.area.sq]]
+  tryme2[[molecule.conc]] <- B0 + B1*tryme2[[molecule.area]] + B2*(tryme2[[molecule.area]]^2)
+  tryme2[[molecule.ng]] <- tryme2[[molecule.conc]]*3.333
+  
+  #plot the samples and standards
+  print(ggplot(tryme, aes_string(x = molecule.area, y = molecule.conc)) +
+	geom_point(data=tryme2, aes_string(x=paste0(molecule,"_area"), y=paste0(molecule,"_nguL"), size=2))+
+	geom_point() +
+	xlab(paste0(molecule,"_area"))+
+	ylab(paste0(molecule,"std concentration (ng/uL)"))+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none"))
+  
+  #calculate how many ug of PAH should be recovered for 100% recovery 
+  tryme2$full.recovery=SampleInfo$SampleMass.mg*SampleInfo$spike/1000
+  
+  molecule.rec=paste0(molecule,"_rec")
+  tryme2[[molecule.rec]]=tryme2[[molecule.ng]]/tryme2[["full.recovery"]]*100
+  
+}
+
+
+
+
+########################################
+#######END PART I'VE WORKED ON #########
+########################################
+
+
+#uncorrected concentration for plotting
+samples.all$Nap_nguL <- Nap.B0 + Nap.B1*samples.all$Nap_area 
+Nap.B2*samples.all$Nap_area^2
+#plot of calibration curve and samples
+library(ggplot2)
+ggplot(standards.all, aes(x = Nap_area, y = Nap_nguL)) +
+	geom_point(data=samples.all, aes(y=Nap_area, x=Nap_nguL, color="red", size=2))+
+	geom_point() +
+	xlab("Nap area")+
+	ylab("Nap std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = Nap.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+samples.all$Nap.ng <- samples.all$PyridineVol.uL*samples.all$Nap_nguL
+samples.all$RecNap.ng <- samples.all$PyridineVol.uL*samples.all$RecNap.nguL
+samples.all$Nap.Recovery <- samples.all$Nap.ng/samples.all$RecNap.ng
+ggplot(samples.all, aes(x = CuOSeries, y = Nap.Recovery)) +
+	geom_point()
+
+#F
+#create a column of area squared in order to do an 2nd order polynomial
+standards.all$F_area2 <- standards.all$F_area^2
+#polynomial lm
+F.poly <- lm(data=standards.all, F_nguL ~ F_area + F_area2)
+summary(F.poly)
+#r-squared and coefficients used in modeling other compounds
+F.r2 <- format(summary(F.poly)$r.squared, digits = 3)
+F.B0 <- summary(F.poly)$coefficients[1,1]
+F.B1 <- summary(F.poly)$coefficients[2,1]
+F.B2 <- summary(F.poly)$coefficients[3,1]
+#x and y are used in the annotate function below
+x = min(standards.all$F_area)
+y = max(standards.all$F_nguL)
+
+samples.all<-samples
+#uncorrected concentration for plotting
+samples.all$F_nguL <- F.B0 + F.B1*samples.all$F_area + F.B2*samples.all$F_area^2
+#plot of calibration curve and samples
+ggplot(standards.all, aes(x = F_area, y = F_nguL)) +
+	geom_point(data=samples.all, aes(x=F_area, y=F_nguL, color="red", size=2))+
+	geom_point() +
+	xlab("F area")+
+	ylab("F std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = F.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+samples.all$F.ng <- samples.all$PyridineVol.uL*samples.all$F_nguL
+samples.all$RecF.ng <- samples.all$PyridineVol.uL*samples.all$RecF.nguL
+samples.all$F.Recovery <- samples.all$F.ng/samples.all$RecF.ng
+ggplot(samples.all, aes(x = CuOSeries, y = F.Recovery)) +
+	geom_point()
+
+samples.all$F.N <- samples.all$F.ng/samples.all$N.ng
+ggplot(samples.all, aes(x = CuOSeries, y = F.N)) +
+	geom_point()
+```
+
+```{r}
+#Quantification of Standards----
+
+#N
+standards.all$N_area2 <- standards.all$N_area^2
+Bd.poly <- lm(data=standards.all, N_nguL ~ N_area + N_area2)
+summary(N.poly)
+N.r2 <- format(summary(N.poly)$r.squared, digits = 3)
+N.B0 <- summary(N.poly)$coefficients[1,1]
+N.B1 <- summary(N.poly)$coefficients[2,1]
+N.B2 <- summary(N.poly)$coefficients[3,1]
+x = min(standards.all$N_area)
+y = max(standards.all$N_nguL)
+
+samples.all$N_nguL.uncorr <- N.B0 + N.B1*samples.all$N_area + N.B2*samples.all$N_area^2
+ggplot(standards.all, aes(x = N_area, y = N_nguL)) +
+	geom_point(data=samples.all, aes(x=N_area, y=N_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("N area")+
+	ylab("N std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = N.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#Acy
+standards.all$Acy_area2 <- standards.all$Acy_area^2
+Acy.poly <- lm(data=standards.all, Acy_nguL ~ Acy_area + Acy_area2)
+summary(Acy.poly)
+Acy.r2 <- format(summary(Acy.poly)$r.squared, digits = 3)
+Acy.B0 <- summary(Acy.poly)$coefficients[1,1]
+Acy.B1 <- summary(Acy.poly)$coefficients[2,1]
+Acy.B2 <- summary(Acy.poly)$coefficients[3,1]
+x = min(standards.all$Acy_area)
+y = max(standards.all$Acy_nguL)
+
+samples.all$Acy_nguL.uncorr <- Acy.B0 + Acy.B1*samples.all$Acy_area + Acy.B2*samples.all$Acy_area^2
+ggplot(standards.all, aes(x = Acy_area, y = Acy_nguL)) +
+	geom_point(data=samples.all, aes(x=Acy_area, y=Acy_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("Acy area")+
+	ylab("Acy std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = Acy.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#X2BrN
+standards.all$X2BrN_area2 <- standards.all$X2BrN_area^2
+X2BrN.poly <- lm(data=standards.all, X2BrN_nguL ~ X2BrN_area + X2BrN_area2)
+summary(X2BrN.poly)
+X2BrN.r2 <- format(summary(X2BrN.poly)$r.squared, digits = 3)
+X2BrN.B0 <- summary(X2BrN.poly)$coefficients[1,1]
+X2BrN.B1 <- summary(X2BrN.poly)$coefficients[2,1]
+X2BrN.B2 <- summary(X2BrN.poly)$coefficients[3,1]
+x = min(standards.all$X2BrN_area)
+y = max(standards.all$X2BrN_nguL)
+
+samples.all$X2BrN_nguL.uncorr <- X2BrN.B0 + X2BrN.B1*samples.all$X2BrN_area + X2BrN.B2*samples.all$X2BrN_area^2
+ggplot(standards.all, aes(x = X2BrN_area, y = X2BrN_nguL)) +
+	geom_point(data=samples.all, aes(x=X2BrN_area, y=X2BrN_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("X2BrN area")+
+	ylab("X2BrN std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = X2BrN.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#Ace
+standards.all$Ace_area2 <- standards.all$Ace_area^2
+Ace.poly <- lm(data=standards.all, Ace_nguL ~ Ace_area + Ace_area2)
+summary(Ace.poly)
+Ace.r2 <- format(summary(Ace.poly)$r.squared, digits = 3)
+Ace.B0 <- summary(Ace.poly)$coefficients[1,1]
+Ace.B1 <- summary(Ace.poly)$coefficients[2,1]
+Ace.B2 <- summary(Ace.poly)$coefficients[3,1]
+x = min(standards.all$Ace_area)
+y = max(standards.all$Ace_nguL)
+
+samples.all$Ace_nguL.uncorr <- Ace.B0 + Ace.B1*samples.all$Ace_area + Ace.B2*samples.all$Ace_area^2
+ggplot(standards.all, aes(x = Ace_area, y = Ace_nguL)) +
+	geom_point(data=samples.all, aes(x=Ace_area, y=Ace_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("Ace area")+
+	ylab("Ace std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = Ace.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#F
+standards.all$F_area2 <- standards.all$F_area^2
+F.poly <- lm(data=standards.all, F_nguL ~ F_area + F_area2)
+summary(F.poly)
+F.r2 <- format(summary(F.poly)$r.squared, digits = 3)
+F.B0 <- summary(F.poly)$coefficients[1,1]
+F.B1 <- summary(F.poly)$coefficients[2,1]
+F.B2 <- summary(F.poly)$coefficients[3,1]
+x = min(standards.all$F_area)
+y = max(standards.all$F_nguL)
+
+samples.all$F_nguL.uncorr <- F.B0 + F.B1*samples.all$F_area + F.B2*samples.all$F_area^2
+ggplot(standards.all, aes(x = F_area, y = F_nguL)) +
+	geom_point(data=samples.all, aes(x=F_area, y=F_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("F area")+
+	ylab("F std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = F.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#P
+standards.all$P_area2 <- standards.all$P_area^2
+P.poly <- lm(data=standards.all, P_nguL ~ P_area + P_area2)
+summary(P.poly)
+P.r2 <- format(summary(P.poly)$r.squared, digits = 3)
+P.B0 <- summary(P.poly)$coefficients[1,1]
+P.B1 <- summary(P.poly)$coefficients[2,1]
+P.B2 <- summary(P.poly)$coefficients[3,1]
+x = min(standards.all$P_area)
+y = max(standards.all$P_nguL)
+
+samples.all$P_nguL.uncorr <- P.B0 + P.B1*samples.all$P_area + P.B2*samples.all$P_area^2
+ggplot(standards.all, aes(x = P_area, y = P_nguL)) +
+	geom_point(data=samples.all, aes(x=P_area, y=P_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("P area")+
+	ylab("P std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = P.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+
+
+#Ant
+standards.all$Ant_area2 <- standards.all$Ant_area^2
+Ant.poly <- lm(data=standards.all, Ant_nguL ~ Ant_area + Ant_area2)
+summary(Ant.poly)
+Ant.r2 <- format(summary(Ant.poly)$r.squared, digits = 3)
+Ant.B0 <- summary(Ant.poly)$coefficients[1,1]
+Ant.B1 <- summary(Ant.poly)$coefficients[2,1]
+Ant.B2 <- summary(Ant.poly)$coefficients[3,1]
+x = min(standards.all$Ant_area)
+y = max(standards.all$Ant_nguL)
+
+samples.all$Ant_nguL.uncorr <- Ant.B0 + Ant.B1*samples.all$Ant_area + Ant.B2*samples.all$Ant_area^2
+ggplot(standards.all, aes(x = Ant_area, y = Ant_nguL)) +
+	geom_point(data=samples.all, aes(x=Ant_area, y=Ant_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("Ant area")+
+	ylab("Ant std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = Ant.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#Fl
+standards.all$Fl_area2 <- standards.all$Fl_area^2
+Fl.poly <- lm(data=standards.all, Fl_nguL ~ Fl_area + Fl_area2)
+summary(Fl.poly)
+Fl.r2 <- format(summary(Fl.poly)$r.squared, digits = 3)
+Fl.B0 <- summary(Fl.poly)$coefficients[1,1]
+Fl.B1 <- summary(Fl.poly)$coefficients[2,1]
+Fl.B2 <- summary(Fl.poly)$coefficients[3,1]
+x = min(standards.all$Fl_area)
+y = max(standards.all$Fl_nguL)
+
+samples.all$Fl_nguL.uncorr <- Fl.B0 + Fl.B1*samples.all$Fl_area + Fl.B2*samples.all$Fl_area^2
+ggplot(standards.all, aes(x = Fl_area, y = Fl_nguL)) +
+	geom_point(data=samples.all, aes(x=Fl_area, y=Fl_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("Fl area")+
+	ylab("Fl std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = Fl.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#Pyr
+standards.all$Pyr_area2 <- standards.all$Pyr_area^2
+Pyr.poly <- lm(data=standards.all, Pyr_nguL ~ Pyr_area + Pyr_area2)
+summary(Pyr.poly)
+Pyr.r2 <- format(summary(Pyr.poly)$r.squared, digits = 3)
+Pyr.B0 <- summary(Pyr.poly)$coefficients[1,1]
+Pyr.B1 <- summary(Pyr.poly)$coefficients[2,1]
+Pyr.B2 <- summary(Pyr.poly)$coefficients[3,1]
+x = min(standards.all$Pyr_area)
+y = max(standards.all$Pyr_nguL)
+
+samples.all$Pyr_nguL.uncorr <- Pyr.B0 + Pyr.B1*samples.all$Pyr_area + Pyr.B2*samples.all$Pyr_area^2
+ggplot(standards.all, aes(x = Pyr_area, y = Pyr_nguL)) +
+	geom_point(data=samples.all, aes(x=Pyr_area, y=Pyr_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("Pyr area")+
+	ylab("Pyr std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = Pyr.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#BaAnt
+standards.all$BaAnt_area2 <- standards.all$BaAnt_area^2
+BaAnt.poly <- lm(data=standards.all, BaAnt_nguL ~ BaAnt_area + BaAnt_area2)
+summary(BaAnt.poly)
+BaAnt.r2 <- format(summary(BaAnt.poly)$r.squared, digits = 3)
+BaAnt.B0 <- summary(BaAnt.poly)$coefficients[1,1]
+BaAnt.B1 <- summary(BaAnt.poly)$coefficients[2,1]
+BaAnt.B2 <- summary(BaAnt.poly)$coefficients[3,1]
+x = min(standards.all$BaAnt_area)
+y = max(standards.all$BaAnt_nguL)
+
+samples.all$BaAnt_nguL.uncorr <- BaAnt.B0 + BaAnt.B1*samples.all$BaAnt_area + BaAnt.B2*samples.all$BaAnt_area^2
+ggplot(standards.all, aes(x = BaAnt_area, y = BaAnt_nguL)) +
+	geom_point(data=samples.all, aes(x=BaAnt_area, y=BaAnt_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("BaAnt area")+
+	ylab("BaAnt std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = BaAnt.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#Chr.Trp
+standards.all$Chr.Trp_area2 <- standards.all$Chr.Trp_area^2
+Chr.Trp.poly <- lm(data=standards.all, Chr.Trp_nguL ~ Chr.Trp_area + Chr.Trp_area2)
+summary(Chr.Trp.poly)
+Chr.Trp.r2 <- format(summary(Chr.Trp.poly)$r.squared, digits = 3)
+Chr.Trp.B0 <- summary(Chr.Trp.poly)$coefficients[1,1]
+Chr.Trp.B1 <- summary(Chr.Trp.poly)$coefficients[2,1]
+Chr.Trp.B2 <- summary(Chr.Trp.poly)$coefficients[3,1]
+x = min(standards.all$Chr.Trp_area)
+y = max(standards.all$Chr.Trp_nguL)
+
+samples.all$Chr.Trp_nguL.uncorr <- Chr.Trp.B0 + Chr.Trp.B1*samples.all$Chr.Trp_area + Chr.Trp.B2*samples.all$Chr.Trp_area^2
+ggplot(standards.all, aes(x = Chr.Trp_area, y = Chr.Trp_nguL)) +
+	geom_point(data=samples.all, aes(x=Chr.Trp_area, y=Chr.Trp_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("Chr.Trp area")+
+	ylab("Chr.Trp std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = Chr.Trp.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#BbjkFl
+standards.all$BbjkFl_area2 <- standards.all$BbjkFl_area^2
+BbjkFl.poly <- lm(data=standards.all, BbjkFl_nguL ~ BbjkFl_area + BbjkFl_area2)
+summary(BbjkFl.poly)
+BbjkFl.r2 <- format(summary(BbjkFl.poly)$r.squared, digits = 3)
+BbjkFl.B0 <- summary(BbjkFl.poly)$coefficients[1,1]
+BbjkFl.B1 <- summary(BbjkFl.poly)$coefficients[2,1]
+BbjkFl.B2 <- summary(BbjkFl.poly)$coefficients[3,1]
+x = min(standards.all$BbjkFl_area)
+y = max(standards.all$BbjkFl_nguL)
+
+samples.all$BbjkFl_nguL.uncorr <- BbjkFl.B0 + BbjkFl.B1*samples.all$BbjkFl_area + BbjkFl.B2*samples.all$BbjkFl_area^2
+ggplot(standards.all, aes(x = BbjkFl_area, y = BbjkFl_nguL)) +
+	geom_point(data=samples.all, aes(x=BbjkFl_area, y=BbjkFl_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("BbjkFl area")+
+	ylab("BbjkFl std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = BbjkFl.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#BaPyr
+standards.all$BaPyr_area2 <- standards.all$BaPyr_area^2
+BaPyr.poly <- lm(data=standards.all, BaPyr_nguL ~ BaPyr_area + BaPyr_area2)
+summary(BaPyr.poly)
+BaPyr.r2 <- format(summary(BaPyr.poly)$r.squared, digits = 3)
+BaPyr.B0 <- summary(BaPyr.poly)$coefficients[1,1]
+BaPyr.B1 <- summary(BaPyr.poly)$coefficients[2,1]
+BaPyr.B2 <- summary(BaPyr.poly)$coefficients[3,1]
+x = min(standards.all$BaPyr_area)
+y = max(standards.all$BaPyr_nguL)
+
+samples.all$BaPyr_nguL.uncorr <- BaPyr.B0 + BaPyr.B1*samples.all$BaPyr_area + BaPyr.B2*samples.all$BaPyr_area^2
+ggplot(standards.all, aes(x = BaPyr_area, y = BaPyr_nguL)) +
+	geom_point(data=samples.all, aes(x=BaPyr_area, y=BaPyr_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("BaPyr area")+
+	ylab("BaPyr std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = BaPyr.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#Ipyr
+standards.all$Ipyr_area2 <- standards.all$Ipyr_area^2
+Ipyr.poly <- lm(data=standards.all, Ipyr_nguL ~ Ipyr_area + Ipyr_area2)
+summary(Ipyr.poly)
+Ipyr.r2 <- format(summary(Ipyr.poly)$r.squared, digits = 3)
+Ipyr.B0 <- summary(Ipyr.poly)$coefficients[1,1]
+Ipyr.B1 <- summary(Ipyr.poly)$coefficients[2,1]
+Ipyr.B2 <- summary(Ipyr.poly)$coefficients[3,1]
+x = min(standards.all$Ipyr_area)
+y = max(standards.all$Ipyr_nguL)
+
+samples.all$Ipyr_nguL.uncorr <- Ipyr.B0 + Ipyr.B1*samples.all$Ipyr_area + Ipyr.B2*samples.all$Ipyr_area^2
+ggplot(standards.all, aes(x = Ipyr_area, y = Ipyr_nguL)) +
+	geom_point(data=samples.all, aes(x=Ipyr_area, y=Ipyr_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("Ipyr area")+
+	ylab("Ipyr std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = Ipyr.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#DBahAnt
+standards.all$DBahAnt_area2 <- standards.all$DBahAnt_area^2
+DBahAnt.poly <- lm(data=standards.all, DBahAnt_nguL ~ DBahAnt_area + DBahAnt_area2)
+summary(DBahAnt.poly)
+DBahAnt.r2 <- format(summary(DBahAnt.poly)$r.squared, digits = 3)
+DBahAnt.B0 <- summary(DBahAnt.poly)$coefficients[1,1]
+DBahAnt.B1 <- summary(DBahAnt.poly)$coefficients[2,1]
+DBahAnt.B2 <- summary(DBahAnt.poly)$coefficients[3,1]
+x = min(standards.all$DBahAnt_area)
+y = max(standards.all$DBahAnt_nguL)
+
+samples.all$DBahAnt_nguL.uncorr <- DBahAnt.B0 + DBahAnt.B1*samples.all$DBahAnt_area + DBahAnt.B2*samples.all$DBahAnt_area^2
+ggplot(standards.all, aes(x = DBahAnt_area, y = DBahAnt_nguL)) +
+	geom_point(data=samples.all, aes(x=DBahAnt_area, y=DBahAnt_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("DBahAnt area")+
+	ylab("DBahAnt std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = DBahAnt.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+#BghiPer
+standards.all$BghiPer_area2 <- standards.all$BghiPer_area^2
+BghiPer.poly <- lm(data=standards.all, BghiPer_nguL ~ BghiPer_area + BghiPer_area2)
+summary(BghiPer.poly)
+BghiPer.r2 <- format(summary(BghiPer.poly)$r.squared, digits = 3)
+BghiPer.B0 <- summary(BghiPer.poly)$coefficients[1,1]
+BghiPer.B1 <- summary(BghiPer.poly)$coefficients[2,1]
+BghiPer.B2 <- summary(BghiPer.poly)$coefficients[3,1]
+x = min(standards.all$BghiPer_area)
+y = max(standards.all$BghiPer_nguL)
+
+samples.all$BghiPer_nguL.uncorr <- BghiPer.B0 + BghiPer.B1*samples.all$BghiPer_area + BghiPer.B2*samples.all$BghiPer_area^2
+ggplot(standards.all, aes(x = BghiPer_area, y = BghiPer_nguL)) +
+	geom_point(data=samples.all, aes(x=BghiPer_area, y=BghiPer_nguL.uncorr, color="red", size=2))+
+	geom_point() +
+	xlab("BghiPer area")+
+	ylab("BghiPer std concentration (ng/uL)")+
+	annotate("text", x=x, y=y, hjust=-1,vjust=1,label = BghiPer.r2)+
+	geom_smooth(method=lm, formula=y ~ poly(x, 2, raw=TRUE))+
+	theme(legend.position="none")
+
+
+```
+
+
+
+```{r}
+write.csv(samples.all, "PAH_output.csv")
+```
+
